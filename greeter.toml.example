@@ -1,0 +1,5 @@
+# Greeter configuration
+# Copy to /etc/greeter.toml
+
+default_session = "niri"
+default_user = "osso"

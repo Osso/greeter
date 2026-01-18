@@ -1,0 +1,16 @@
+[package]
+name = "greeter"
+version = "0.1.0"
+edition = "2024"
+description = "Minimal greetd greeter"
+
+[dependencies]
+greetd_ipc = { version = "0.10", features = ["tokio-codec"] }
+iced = { version = "0.14", features = ["tokio"] }
+tokio = { version = "1", features = ["net", "rt-multi-thread", "macros"] }
+pwd = "1.4"
+thiserror = "2.0"
+toml = "0.8"
+serde = { version = "1.0", features = ["derive"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
