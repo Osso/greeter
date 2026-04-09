@@ -54,7 +54,8 @@ impl GreetdClient {
 
     pub async fn post_auth(&mut self, response: Option<String>) -> Result<Response, String> {
         info!("Posting auth response");
-        self.send(Request::PostAuthMessageResponse { response }).await
+        self.send(Request::PostAuthMessageResponse { response })
+            .await
     }
 
     pub async fn start_session(&mut self, cmd: Vec<String>) -> Result<Response, String> {

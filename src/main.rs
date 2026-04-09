@@ -4,15 +4,14 @@ mod sessions;
 mod theme;
 mod users;
 
-use iced::keyboard::{self, key, Event as KeyEvent, Key};
-use iced::widget::{button, column, container, pick_list, text, text_input, Id};
+use iced::keyboard::{self, Event as KeyEvent, Key, key};
+use iced::widget::{Id, button, column, container, pick_list, text, text_input};
 use iced::{Center, Element, Fill, Font, Subscription, Task, widget::operation};
 use tracing::{error, info};
 
 use config::Config;
 use greetd::AuthStatus;
 use sessions::Session;
-use users::User;
 
 const PASSWORD_INPUT_ID: &str = "password";
 
@@ -40,9 +39,7 @@ enum Message {
     KeyboardEvent,
 }
 
-#[allow(dead_code)]
 struct Greeter {
-    users: Vec<User>,
     sessions: Vec<Session>,
     username: String,
     password: String,
@@ -54,7 +51,7 @@ struct Greeter {
 impl Greeter {
     fn new() -> (Self, Task<Message>) {
         let config = Config::load();
-        let users = users::get_users();
+        let user_count = users::get_usernames().len();
         let sessions = sessions::get_sessions();
 
         let default_session = config
@@ -66,11 +63,10 @@ impl Greeter {
 
         let username = config.default_user.unwrap_or_default();
 
-        info!("Found {} users, {} sessions", users.len(), sessions.len());
+        info!("Found {} users, {} sessions", user_count, sessions.len());
 
         (
             Self {
-                users,
                 sessions,
                 username,
                 password: String::new(),
@@ -84,71 +80,12 @@ impl Greeter {
 
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::UsernameChanged(username) => {
-                self.username = username;
-                Task::none()
-            }
-            Message::PasswordChanged(password) => {
-                self.password = password;
-                Task::none()
-            }
-            Message::SessionSelected(session) => {
-                self.selected_session = Some(session);
-                Task::none()
-            }
-            Message::Submit => {
-                if self.username.is_empty() {
-                    self.status = "Enter a username".to_string();
-                    return Task::none();
-                }
-
-                self.authenticating = true;
-                self.status = "Authenticating...".to_string();
-
-                let username = self.username.clone();
-                let password = self.password.clone();
-
-                Task::perform(
-                    async move { greetd::authenticate(&username, &password).await },
-                    Message::AuthResult,
-                )
-            }
-            Message::AuthResult(result) => {
-                match result {
-                    Ok(AuthStatus::Success) => {
-                        self.status = "Starting session...".to_string();
-                        let session = self.selected_session.clone();
-                        return Task::perform(
-                            async move { greetd::start_session(session).await },
-                            Message::SessionStarted,
-                        );
-                    }
-                    Ok(AuthStatus::AuthRequired) => {
-                        self.status = "Authentication required".to_string();
-                    }
-                    Err(e) => {
-                        error!("Auth failed: {}", e);
-                        self.status = format!("Error: {}", e);
-                    }
-                }
-                self.authenticating = false;
-                self.password.clear();
-                Task::none()
-            }
-            Message::SessionStarted(result) => {
-                match result {
-                    Ok(()) => {
-                        self.status = "Session started!".to_string();
-                        std::process::exit(0);
-                    }
-                    Err(e) => {
-                        error!("Session start failed: {}", e);
-                        self.status = format!("Error: {}", e);
-                    }
-                }
-                self.authenticating = false;
-                Task::none()
-            }
+            Message::UsernameChanged(username) => self.update_username(username),
+            Message::PasswordChanged(password) => self.update_password(password),
+            Message::SessionSelected(session) => self.select_session(session),
+            Message::Submit => self.submit(),
+            Message::AuthResult(result) => self.handle_auth_result(result),
+            Message::SessionStarted(result) => self.handle_session_started(result),
             Message::FocusNext => operation::focus_next(),
             Message::FocusPrevious => operation::focus_previous(),
             Message::KeyboardEvent => Task::none(),
@@ -172,10 +109,94 @@ impl Greeter {
         })
     }
 
-#[cfg(test)]
+    fn update_username(&mut self, username: String) -> Task<Message> {
+        self.username = username;
+        Task::none()
+    }
+
+    fn update_password(&mut self, password: String) -> Task<Message> {
+        self.password = password;
+        Task::none()
+    }
+
+    fn select_session(&mut self, session: Session) -> Task<Message> {
+        self.selected_session = Some(session);
+        Task::none()
+    }
+
+    fn submit(&mut self) -> Task<Message> {
+        if self.username.is_empty() {
+            self.status = "Enter a username".to_string();
+            return Task::none();
+        }
+
+        self.authenticating = true;
+        self.status = "Authenticating...".to_string();
+
+        let username = self.username.clone();
+        let password = self.password.clone();
+
+        Task::perform(
+            async move { greetd::authenticate(&username, &password).await },
+            Message::AuthResult,
+        )
+    }
+
+    fn handle_auth_result(&mut self, result: Result<AuthStatus, String>) -> Task<Message> {
+        match result {
+            Ok(AuthStatus::Success) => self.start_selected_session(),
+            Ok(AuthStatus::AuthRequired) => self.finish_auth_attempt("Authentication required"),
+            Err(error) => self.fail_auth_attempt(error),
+        }
+    }
+
+    fn start_selected_session(&mut self) -> Task<Message> {
+        self.status = "Starting session...".to_string();
+        let session = self.selected_session.clone();
+        Task::perform(
+            async move { greetd::start_session(session).await },
+            Message::SessionStarted,
+        )
+    }
+
+    fn finish_auth_attempt(&mut self, status: &str) -> Task<Message> {
+        self.status = status.to_string();
+        self.reset_auth_state();
+        Task::none()
+    }
+
+    fn fail_auth_attempt(&mut self, error_message: String) -> Task<Message> {
+        error!("Auth failed: {}", error_message);
+        self.status = format!("Error: {}", error_message);
+        self.reset_auth_state();
+        Task::none()
+    }
+
+    fn handle_session_started(&mut self, result: Result<(), String>) -> Task<Message> {
+        match result {
+            Ok(()) => {
+                self.status = "Session started!".to_string();
+                std::process::exit(0);
+            }
+            Err(error_message) => self.fail_session_start(error_message),
+        }
+    }
+
+    fn fail_session_start(&mut self, error_message: String) -> Task<Message> {
+        error!("Session start failed: {}", error_message);
+        self.status = format!("Error: {}", error_message);
+        self.authenticating = false;
+        Task::none()
+    }
+
+    fn reset_auth_state(&mut self) {
+        self.authenticating = false;
+        self.password.clear();
+    }
+
+    #[cfg(test)]
     fn test_new() -> Self {
         Self {
-            users: vec![],
             sessions: vec![],
             username: String::new(),
             password: String::new(),
@@ -186,54 +207,7 @@ impl Greeter {
     }
 
     fn view(&self) -> Element<'_, Message> {
-        let username_input = text_input("Username", &self.username)
-            .on_input(Message::UsernameChanged)
-            .on_submit(Message::Submit)
-            .padding(12)
-            .size(16)
-            .style(theme::text_input_style);
-
-        let password_input = text_input("Password", &self.password)
-            .id(Id::new(PASSWORD_INPUT_ID))
-            .on_input(Message::PasswordChanged)
-            .on_submit(Message::Submit)
-            .secure(true)
-            .padding(12)
-            .size(16)
-            .style(theme::text_input_style);
-
-        let session_picker = pick_list(
-            &self.sessions[..],
-            self.selected_session.clone(),
-            Message::SessionSelected,
-        )
-        .placeholder("Select session")
-        .padding(12)
-        .text_size(16)
-        .style(theme::pick_list_style);
-
-        let submit_button = button(text("Login").size(16))
-            .on_press_maybe((!self.authenticating).then_some(Message::Submit))
-            .padding([12, 24])
-            .style(theme::button_style);
-
-        let status_text = text(&self.status)
-            .size(14)
-            .style(theme::status_text);
-
-        let card = container(
-            column![
-                username_input,
-                password_input,
-                session_picker,
-                submit_button,
-                status_text,
-            ]
-            .spacing(16)
-            .padding(32)
-            .width(320),
-        )
-        .style(theme::card);
+        let card = container(self.form()).style(theme::card);
 
         container(card)
             .width(Fill)
@@ -242,6 +216,67 @@ impl Greeter {
             .align_y(Center)
             .style(theme::background)
             .into()
+    }
+
+    fn form(&self) -> Element<'_, Message> {
+        column![
+            self.username_input(),
+            self.password_input(),
+            self.session_picker(),
+            self.submit_button(),
+            self.status_text(),
+        ]
+        .spacing(16)
+        .padding(32)
+        .width(320)
+        .into()
+    }
+
+    fn username_input(&self) -> Element<'_, Message> {
+        text_input("Username", &self.username)
+            .on_input(Message::UsernameChanged)
+            .on_submit(Message::Submit)
+            .padding(12)
+            .size(16)
+            .style(theme::text_input_style)
+            .into()
+    }
+
+    fn password_input(&self) -> Element<'_, Message> {
+        text_input("Password", &self.password)
+            .id(Id::new(PASSWORD_INPUT_ID))
+            .on_input(Message::PasswordChanged)
+            .on_submit(Message::Submit)
+            .secure(true)
+            .padding(12)
+            .size(16)
+            .style(theme::text_input_style)
+            .into()
+    }
+
+    fn session_picker(&self) -> Element<'_, Message> {
+        pick_list(
+            &self.sessions[..],
+            self.selected_session.clone(),
+            Message::SessionSelected,
+        )
+        .placeholder("Select session")
+        .padding(12)
+        .text_size(16)
+        .style(theme::pick_list_style)
+        .into()
+    }
+
+    fn submit_button(&self) -> Element<'_, Message> {
+        button(text("Login").size(16))
+            .on_press_maybe((!self.authenticating).then_some(Message::Submit))
+            .padding([12, 24])
+            .style(theme::button_style)
+            .into()
+    }
+
+    fn status_text(&self) -> Element<'_, Message> {
+        text(&self.status).size(14).style(theme::status_text).into()
     }
 }
 
