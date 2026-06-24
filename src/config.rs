@@ -15,25 +15,28 @@ pub struct Config {
 
 impl Config {
     pub fn load() -> Self {
-        let path = Path::new(CONFIG_PATH);
+        Self::load_from_path(Path::new(CONFIG_PATH), CONFIG_PATH)
+    }
+
+    fn load_from_path(path: &Path, label: &str) -> Self {
         if !path.exists() {
-            info!("No config file at {CONFIG_PATH}, using defaults");
+            info!("No config file at {label}, using defaults");
             return Self::default();
         }
 
         match fs::read_to_string(path) {
             Ok(content) => match toml::from_str(&content) {
                 Ok(config) => {
-                    info!("Loaded config from {CONFIG_PATH}");
+                    info!("Loaded config from {label}");
                     config
                 }
                 Err(e) => {
-                    warn!("Failed to parse {CONFIG_PATH}: {e}");
+                    warn!("Failed to parse {label}: {e}");
                     Self::default()
                 }
             },
             Err(e) => {
-                warn!("Failed to read {CONFIG_PATH}: {e}");
+                warn!("Failed to read {label}: {e}");
                 Self::default()
             }
         }
@@ -71,5 +74,37 @@ default_user = "osso"
         let config: Config = toml::from_str(content).unwrap();
         assert_eq!(config.default_session, Some("niri".to_string()));
         assert_eq!(config.default_user, Some("osso".to_string()));
+    }
+
+    #[test]
+    fn load_from_path_reads_valid_config() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(
+            file.path(),
+            "default_session = \"niri\"\ndefault_user = \"osso\"\n",
+        )
+        .unwrap();
+
+        let config = Config::load_from_path(file.path(), "test config");
+
+        assert_eq!(config.default_session, Some("niri".to_string()));
+        assert_eq!(config.default_user, Some("osso".to_string()));
+    }
+
+    #[test]
+    fn load_from_path_uses_defaults_for_missing_invalid_or_unreadable_config() {
+        let missing = std::env::temp_dir().join("greeter-missing-config.toml");
+        let missing_config = Config::load_from_path(&missing, "missing");
+        assert!(missing_config.default_session.is_none());
+        assert!(missing_config.default_user.is_none());
+
+        let invalid = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(invalid.path(), "default_session = ").unwrap();
+        let invalid_config = Config::load_from_path(invalid.path(), "invalid");
+        assert!(invalid_config.default_session.is_none());
+
+        let unreadable = tempfile::tempdir().unwrap();
+        let unreadable_config = Config::load_from_path(unreadable.path(), "unreadable");
+        assert!(unreadable_config.default_user.is_none());
     }
 }

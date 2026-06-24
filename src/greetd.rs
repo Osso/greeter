@@ -1,7 +1,10 @@
 use std::env;
 
+#[cfg(not(test))]
 use greetd_ipc::codec::TokioCodec;
+#[cfg(not(test))]
 use greetd_ipc::{Request, Response};
+#[cfg(not(test))]
 use tokio::net::UnixStream;
 use tracing::info;
 
@@ -20,10 +23,12 @@ pub enum AuthStatus {
     AuthRequired,
 }
 
+#[cfg(not(test))]
 pub struct GreetdClient {
     socket: UnixStream,
 }
 
+#[cfg(not(test))]
 impl GreetdClient {
     pub async fn connect() -> Result<Self, String> {
         let sock_path =
@@ -73,6 +78,87 @@ impl GreetdClient {
     }
 }
 
+#[cfg(not(test))]
+async fn handle_create_session_response(
+    client: &mut GreetdClient,
+    response: Response,
+    password: &str,
+) -> Result<AuthStatus, String> {
+    match response {
+        Response::Success => Ok(AuthStatus::Success),
+        Response::AuthMessage { .. } => post_auth_password(client, password).await,
+        Response::Error { description, .. } => Err(description),
+    }
+}
+
+#[cfg(not(test))]
+async fn post_auth_password(
+    client: &mut GreetdClient,
+    password: &str,
+) -> Result<AuthStatus, String> {
+    let response = client.post_auth(Some(password.to_string())).await?;
+    match response {
+        Response::Success => Ok(AuthStatus::Success),
+        Response::AuthMessage { .. } => Ok(AuthStatus::AuthRequired),
+        Response::Error { description, .. } => {
+            let _ = client.cancel_session().await;
+            Err(description)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn fake_auth_accepts_test_password() {
+        unsafe {
+            env::remove_var(GREETD_SOCK);
+        }
+
+        let status = authenticate("osso", "test").await.unwrap();
+
+        assert!(matches!(status, AuthStatus::Success));
+    }
+
+    #[tokio::test]
+    async fn fake_auth_rejects_other_passwords() {
+        unsafe {
+            env::remove_var(GREETD_SOCK);
+        }
+
+        let error = authenticate("osso", "wrong").await.unwrap_err();
+
+        assert!(error.contains("Invalid password"));
+    }
+
+    #[tokio::test]
+    async fn fake_start_session_requires_selection() {
+        unsafe {
+            env::remove_var(GREETD_SOCK);
+        }
+
+        let error = start_session(None).await.unwrap_err();
+
+        assert_eq!(error, "No session selected");
+    }
+
+    #[tokio::test]
+    async fn fake_start_session_accepts_selected_session() {
+        unsafe {
+            env::remove_var(GREETD_SOCK);
+        }
+        let session = Session {
+            name: "Niri".to_string(),
+            command: vec!["niri".to_string()],
+            session_type: crate::sessions::SessionType::Wayland,
+        };
+
+        start_session(Some(session)).await.unwrap();
+    }
+}
+
 pub async fn authenticate(username: &str, password: &str) -> Result<AuthStatus, String> {
     if is_fake_mode() {
         info!("[FAKE] Authenticating {username}");
@@ -83,24 +169,16 @@ pub async fn authenticate(username: &str, password: &str) -> Result<AuthStatus, 
         };
     }
 
-    let mut client = GreetdClient::connect().await?;
+    #[cfg(test)]
+    {
+        Err(format!("Missing {GREETD_SOCK} env var"))
+    }
 
-    let response = client.create_session(username).await?;
-
-    match response {
-        Response::Success => Ok(AuthStatus::Success),
-        Response::AuthMessage { .. } => {
-            let response = client.post_auth(Some(password.to_string())).await?;
-            match response {
-                Response::Success => Ok(AuthStatus::Success),
-                Response::AuthMessage { .. } => Ok(AuthStatus::AuthRequired),
-                Response::Error { description, .. } => {
-                    let _ = client.cancel_session().await;
-                    Err(description)
-                }
-            }
-        }
-        Response::Error { description, .. } => Err(description),
+    #[cfg(not(test))]
+    {
+        let mut client = GreetdClient::connect().await?;
+        let response = client.create_session(username).await?;
+        handle_create_session_response(&mut client, response, password).await
     }
 }
 
@@ -112,12 +190,19 @@ pub async fn start_session(session: Option<Session>) -> Result<(), String> {
         return Ok(());
     }
 
-    let mut client = GreetdClient::connect().await?;
+    #[cfg(test)]
+    {
+        Err(format!("Missing {GREETD_SOCK} env var"))
+    }
 
-    let response = client.start_session(session.command).await?;
-    match response {
-        Response::Success => Ok(()),
-        Response::Error { description, .. } => Err(description),
-        Response::AuthMessage { .. } => Err("Unexpected auth message".to_string()),
+    #[cfg(not(test))]
+    {
+        let mut client = GreetdClient::connect().await?;
+        let response = client.start_session(session.command).await?;
+        match response {
+            Response::Success => Ok(()),
+            Response::Error { description, .. } => Err(description),
+            Response::AuthMessage { .. } => Err("Unexpected auth message".to_string()),
+        }
     }
 }

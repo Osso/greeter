@@ -29,9 +29,13 @@ impl fmt::Display for Session {
 }
 
 pub fn get_sessions() -> Vec<Session> {
+    get_sessions_from_dirs(SESSION_DIRS)
+}
+
+fn get_sessions_from_dirs(session_dirs: &[&str]) -> Vec<Session> {
     let mut sessions = Vec::new();
 
-    for dir in SESSION_DIRS {
+    for dir in session_dirs {
         let session_type = if dir.contains("wayland") {
             SessionType::Wayland
         } else {
@@ -142,5 +146,46 @@ mod tests {
             session_type: SessionType::Wayland,
         };
         assert_eq!(format!("{}", session), "Sway");
+    }
+
+    #[test]
+    fn parse_desktop_file_reads_valid_file_and_ignores_missing_file() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), "Name=Niri\nExec=niri --session").unwrap();
+        let path = file.path().to_path_buf();
+
+        let session = parse_desktop_file(&path, SessionType::Wayland).unwrap();
+
+        assert_eq!(session.name, "Niri");
+        assert_eq!(session.command, vec!["niri", "--session"]);
+        assert!(parse_desktop_file(&path.with_extension("missing"), SessionType::X11).is_none());
+    }
+
+    #[test]
+    fn get_sessions_from_dirs_reads_desktop_files_and_sorts_by_name() {
+        let wayland = tempfile::tempdir().unwrap();
+        let x11 = tempfile::tempdir().unwrap();
+        let wayland_path = wayland.path().join("wayland-sessions");
+        let x11_path = x11.path().join("xsessions");
+        std::fs::create_dir(&wayland_path).unwrap();
+        std::fs::create_dir(&x11_path).unwrap();
+        std::fs::write(wayland_path.join("z.desktop"), "Name=Zed\nExec=zed").unwrap();
+        std::fs::write(x11_path.join("a.desktop"), "Name=Alpha\nExec=alpha").unwrap();
+        std::fs::write(x11_path.join("ignored.txt"), "Name=Ignored\nExec=ignored").unwrap();
+        std::fs::write(x11_path.join("broken.desktop"), "Name=Broken").unwrap();
+        let dirs = [
+            wayland_path.to_string_lossy().into_owned(),
+            x11_path.to_string_lossy().into_owned(),
+            x11_path.join("missing").to_string_lossy().into_owned(),
+        ];
+        let refs: Vec<&str> = dirs.iter().map(String::as_str).collect();
+
+        let sessions = get_sessions_from_dirs(&refs);
+
+        assert_eq!(sessions.len(), 2);
+        assert_eq!(sessions[0].name, "Alpha");
+        assert_eq!(sessions[0].session_type, SessionType::X11);
+        assert_eq!(sessions[1].name, "Zed");
+        assert_eq!(sessions[1].session_type, SessionType::Wayland);
     }
 }

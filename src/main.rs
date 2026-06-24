@@ -1,20 +1,30 @@
 mod config;
 mod greetd;
 mod sessions;
+#[cfg(not(test))]
 mod theme;
+#[cfg(not(test))]
 mod users;
 
+#[cfg(not(test))]
 use iced::keyboard::{self, Event as KeyEvent, Key, key};
+#[cfg(not(test))]
 use iced::widget::{Id, button, column, container, pick_list, text, text_input};
-use iced::{Center, Element, Fill, Font, Subscription, Task, widget::operation};
-use tracing::{error, info};
+#[cfg(not(test))]
+use iced::{Center, Element, Fill, Font, Subscription};
+use iced::{Task, widget::operation};
+use tracing::error;
+#[cfg(not(test))]
+use tracing::info;
 
+#[cfg(not(test))]
 use config::Config;
 use greetd::AuthStatus;
 use sessions::Session;
 
 const PASSWORD_INPUT_ID: &str = "password";
 
+#[cfg(not(test))]
 fn main() -> iced::Result {
     tracing_subscriber::fmt::init();
 
@@ -49,6 +59,7 @@ struct Greeter {
 }
 
 impl Greeter {
+    #[cfg(not(test))]
     fn new() -> (Self, Task<Message>) {
         let config = Config::load();
         let user_count = users::get_usernames().len();
@@ -92,6 +103,7 @@ impl Greeter {
         }
     }
 
+    #[cfg(not(test))]
     fn subscription(&self) -> Subscription<Message> {
         keyboard::listen().map(|event| match event {
             KeyEvent::KeyPressed {
@@ -206,6 +218,7 @@ impl Greeter {
         }
     }
 
+    #[cfg(not(test))]
     fn view(&self) -> Element<'_, Message> {
         let card = container(self.form()).style(theme::card);
 
@@ -218,6 +231,7 @@ impl Greeter {
             .into()
     }
 
+    #[cfg(not(test))]
     fn form(&self) -> Element<'_, Message> {
         column![
             self.username_input(),
@@ -232,6 +246,7 @@ impl Greeter {
         .into()
     }
 
+    #[cfg(not(test))]
     fn username_input(&self) -> Element<'_, Message> {
         text_input("Username", &self.username)
             .on_input(Message::UsernameChanged)
@@ -242,6 +257,7 @@ impl Greeter {
             .into()
     }
 
+    #[cfg(not(test))]
     fn password_input(&self) -> Element<'_, Message> {
         text_input("Password", &self.password)
             .id(Id::new(PASSWORD_INPUT_ID))
@@ -254,6 +270,7 @@ impl Greeter {
             .into()
     }
 
+    #[cfg(not(test))]
     fn session_picker(&self) -> Element<'_, Message> {
         pick_list(
             &self.sessions[..],
@@ -267,6 +284,7 @@ impl Greeter {
         .into()
     }
 
+    #[cfg(not(test))]
     fn submit_button(&self) -> Element<'_, Message> {
         button(text("Login").size(16))
             .on_press_maybe((!self.authenticating).then_some(Message::Submit))
@@ -275,6 +293,7 @@ impl Greeter {
             .into()
     }
 
+    #[cfg(not(test))]
     fn status_text(&self) -> Element<'_, Message> {
         text(&self.status).size(14).style(theme::status_text).into()
     }
@@ -333,6 +352,17 @@ mod tests {
     }
 
     #[test]
+    fn auth_success_starts_selected_session() {
+        let mut greeter = Greeter::test_new();
+        greeter.authenticating = true;
+
+        let _ = greeter.update(Message::AuthResult(Ok(AuthStatus::Success)));
+
+        assert_eq!(greeter.status, "Starting session...");
+        assert!(greeter.authenticating);
+    }
+
+    #[test]
     fn auth_error_clears_password() {
         let mut greeter = Greeter::test_new();
         greeter.password = "secret".to_string();
@@ -353,5 +383,28 @@ mod tests {
 
         assert!(greeter.password.is_empty());
         assert!(!greeter.authenticating);
+    }
+
+    #[test]
+    fn session_start_error_keeps_app_alive_and_resets_authentication() {
+        let mut greeter = Greeter::test_new();
+        greeter.authenticating = true;
+
+        let _ = greeter.update(Message::SessionStarted(Err("failed".to_string())));
+
+        assert_eq!(greeter.status, "Error: failed");
+        assert!(!greeter.authenticating);
+    }
+
+    #[test]
+    fn focus_and_keyboard_messages_do_not_change_state() {
+        let mut greeter = Greeter::test_new();
+        greeter.username = "alice".to_string();
+
+        let _ = greeter.update(Message::KeyboardEvent);
+        let _ = greeter.update(Message::FocusNext);
+        let _ = greeter.update(Message::FocusPrevious);
+
+        assert_eq!(greeter.username, "alice");
     }
 }
